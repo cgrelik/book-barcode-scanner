@@ -17,6 +17,7 @@ import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,14 +27,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -48,8 +57,14 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import org.chromium.net.CronetEngine
 import xyz.cgsoftware.barcodescanner.models.Book
+import xyz.cgsoftware.barcodescanner.services.AuthService
+import xyz.cgsoftware.barcodescanner.services.BackendApi
 import xyz.cgsoftware.barcodescanner.services.BooksApiRequestCallback
+import xyz.cgsoftware.barcodescanner.ui.LoginScreen
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.Executors
 import androidx.camera.core.Preview as CameraPreview
 
@@ -68,7 +83,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BarcodeScannerTheme {
-                CameraPreview()
+                AppContent()
             }
         }
 
@@ -109,7 +124,57 @@ fun validChecksum13(isbn: String): Boolean {
 }
 
 @Composable
-fun CameraPreview(modifier: Modifier = Modifier) {
+fun AppContent(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val authService = remember { AuthService(context) }
+    var isAuthenticated by remember { mutableStateOf<Boolean?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Check authentication state on startup
+    LaunchedEffect(Unit) {
+        isAuthenticated = authService.isAuthenticated()
+    }
+
+    when (isAuthenticated) {
+        null -> {
+            // Loading state
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+        false -> {
+            // Show login screen
+            LoginScreen(
+                onLoginSuccess = {
+                    isAuthenticated = true
+                }
+            )
+        }
+        true -> {
+            // Show camera preview with sign out option
+            CameraPreviewWithAuth(
+                authService = authService,
+                onSignOut = {
+                    scope.launch {
+                        authService.signOut()
+                        isAuthenticated = false
+                    }
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CameraPreviewWithAuth(
+    authService: AuthService,
+    onSignOut: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -194,7 +259,30 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             executor.shutdown()
         }
     }
+    
+    var userName by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        userName = authService.getUserName()
+    }
+    
     Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
+        // App bar with user info and sign out
+        TopAppBar(
+            title = { Text("Book Scanner") },
+            actions = {
+                if (userName != null) {
+                    Text(
+                        text = userName!!,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                TextButton(onClick = onSignOut) {
+                    Text("Sign Out")
+                }
+            }
+        )
+        
         Column(modifier = modifier.height(400.dp).fillMaxWidth()) {
             AndroidView(
                 factory = { previewView },
