@@ -1,8 +1,6 @@
 package xyz.cgsoftware.barcodescanner.ui
 
-import android.content.Context
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -10,10 +8,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.tasks.Task
 import kotlinx.coroutines.launch
 import xyz.cgsoftware.barcodescanner.services.AuthService
 import xyz.cgsoftware.barcodescanner.services.BackendApi
@@ -24,6 +18,7 @@ fun LoginScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val authService = remember { AuthService(context) }
     val backendApi = remember { BackendApi(authService) }
     val scope = rememberCoroutineScope()
@@ -31,38 +26,54 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val signInLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+    fun performSignIn(filterByAuthorizedAccounts: Boolean = true) {
+        if (activity == null) {
+            errorMessage = "Activity context required for sign-in"
+            return
+        }
+        
         scope.launch {
             isLoading = true
             errorMessage = null
             
-            val idToken = authService.handleSignInResult(task)
-            
-            if (idToken != null) {
-                // Exchange ID token for JWT
-                val authResult = backendApi.exchangeIdTokenForJwt(idToken)
+            try {
+                val idToken = if (filterByAuthorizedAccounts) {
+                    authService.signIn(activity)
+                } else {
+                    authService.signUp(activity)
+                }
                 
-                authResult.fold(
-                    onSuccess = { authResponse ->
-                        // Save token and user info
-                        authService.saveToken(
-                            authResponse.token,
-                            authResponse.user.email,
-                            authResponse.user.name
-                        )
-                        isLoading = false
-                        onLoginSuccess()
-                    },
-                    onFailure = { exception ->
-                        errorMessage = "Authentication failed: ${exception.message}"
+                if (idToken != null) {
+                    // Exchange ID token for JWT
+                    val authResult = backendApi.exchangeIdTokenForJwt(idToken)
+                    
+                    authResult.fold(
+                        onSuccess = { authResponse ->
+                            // Save token and user info
+                            authService.saveToken(
+                                authResponse.token,
+                                authResponse.user.email,
+                                authResponse.user.name
+                            )
+                            isLoading = false
+                            onLoginSuccess()
+                        },
+                        onFailure = { exception ->
+                            errorMessage = "Authentication failed: ${exception.message}"
+                            isLoading = false
+                        }
+                    )
+                } else {
+                    // If sign-in with authorized accounts failed, try sign-up
+                    if (filterByAuthorizedAccounts) {
+                        performSignIn(filterByAuthorizedAccounts = false)
+                    } else {
+                        errorMessage = "Failed to get ID token from Google"
                         isLoading = false
                     }
-                )
-            } else {
-                errorMessage = "Failed to get ID token from Google"
+                }
+            } catch (e: Exception) {
+                errorMessage = "Sign-in error: ${e.message}"
                 isLoading = false
             }
         }
@@ -107,10 +118,9 @@ fun LoginScreen(
 
         Button(
             onClick = {
-                val signInIntent = authService.getSignInClient().signInIntent
-                signInLauncher.launch(signInIntent)
+                performSignIn()
             },
-            enabled = !isLoading,
+            enabled = !isLoading && activity != null,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)

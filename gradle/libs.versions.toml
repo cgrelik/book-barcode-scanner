@@ -21,6 +21,9 @@ playServicesMlkitBarcodeScanningVersion = "18.3.1"
 coilComposeVersion = "3.2.0"
 coilNetworkOkhttp = "3.2.0"
 materialIconsExtended = "1.7.8"
+googleid = "1.1.1"
+credentials = "1.3.0"
+credentialsPlayServicesAuth = "1.3.0"
 
 [libraries]
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraCore" }
@@ -53,6 +56,9 @@ play-services-cronet = { module = "com.google.android.gms:play-services-cronet",
 coil3-coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coilComposeVersion" }
 coil3-coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coilNetworkOkhttp" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentialsPlayServicesAuth" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

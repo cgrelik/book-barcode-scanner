@@ -70,7 +70,7 @@ class BackendApi(private val authService: AuthService) {
      */
     suspend fun exchangeIdTokenForJwt(idToken: String): Result<AuthResponse> = withContext(Dispatchers.IO) {
         try {
-            val url = "$baseUrl/api/auth/google/mobile"
+            val url = "$baseUrl/auth/google/mobile"
             val requestBody = gson.toJson(AuthRequest(idToken))
                 .toRequestBody("application/json".toMediaType())
             

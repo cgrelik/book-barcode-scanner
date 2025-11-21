@@ -1,21 +1,26 @@
 package xyz.cgsoftware.barcodescanner.services
 
+import android.app.Activity
 import android.content.Context
 import android.util.Log
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.GetCredentialResponse
+import androidx.credentials.exceptions.GetCredentialException
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.tasks.Task
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import xyz.cgsoftware.barcodescanner.BuildConfig
 
 private const val TAG = "AuthService"
@@ -26,36 +31,100 @@ private val USER_NAME_KEY = stringPreferencesKey("user_name")
 
 class AuthService(private val context: Context) {
     private val dataStore: DataStore<Preferences> = context.dataStore
+    private val credentialManager: CredentialManager = CredentialManager.create(context)
     
-    private val googleSignInClient: GoogleSignInClient by lazy {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(BuildConfig.GOOGLE_OAUTH_CLIENT_ID) // Server client ID for backend verification
-            .requestEmail()
+    /**
+     * Create a GetCredentialRequest for Google Sign-In
+     * @param filterByAuthorizedAccounts If true, only show previously authorized accounts. If false, show all Google accounts.
+     */
+    fun createSignInRequest(filterByAuthorizedAccounts: Boolean = true): GetCredentialRequest {
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(BuildConfig.GOOGLE_OAUTH_CLIENT_ID)
+            .setAutoSelectEnabled(true)
+            .setNonce("thisisthebarcodescannerapp")
             .build()
-        GoogleSignIn.getClient(context, gso)
+        
+        return GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
     }
 
     /**
-     * Get the Google Sign-In client for initiating sign-in
+     * Sign in with Google using Credential Manager
+     * @param activity The activity context needed for the credential request
+     * @return The ID token if successful, null otherwise
      */
-    fun getSignInClient(): GoogleSignInClient = googleSignInClient
+    suspend fun signIn(activity: Activity): String? {
+        return try {
+            val request = createSignInRequest(filterByAuthorizedAccounts = true)
+            val result = credentialManager.getCredential(
+                request = request,
+                context = activity
+            )
+            handleSignIn(result)
+        } catch (e: GetCredentialException) {
+            Log.e(TAG, "Sign-in failed", e)
+            null
+        }
+    }
+
+    /**
+     * Sign up with Google (allows new accounts)
+     * @param activity The activity context needed for the credential request
+     * @return The ID token if successful, null otherwise
+     */
+    suspend fun signUp(activity: Activity): String? {
+        return try {
+            val request = createSignInRequest(filterByAuthorizedAccounts = false)
+            val result = credentialManager.getCredential(
+                request = request,
+                context = activity
+            )
+            handleSignIn(result)
+        } catch (e: GetCredentialException) {
+            Log.e(TAG, "Sign-up failed", e)
+            null
+        }
+    }
 
     /**
      * Handle the sign-in result and extract ID token
      */
-    suspend fun handleSignInResult(task: Task<GoogleSignInAccount>): String? {
+    private fun handleSignIn(result: GetCredentialResponse): String? {
         return try {
-            val account = task.getResult(ApiException::class.java)
-            val idToken = account.idToken
-            if (idToken != null) {
-                Log.d(TAG, "Sign-in successful, ID token obtained")
-                idToken
-            } else {
-                Log.e(TAG, "ID token is null")
-                null
+            val credential = result.credential
+            
+            when (credential) {
+                is CustomCredential -> {
+                    if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                        try {
+                            val googleIdTokenCredential = GoogleIdTokenCredential
+                                .createFrom(credential.data)
+                            val idToken = googleIdTokenCredential.idToken
+                            if (idToken != null) {
+                                Log.d(TAG, "Sign-in successful, ID token obtained")
+                                idToken
+                            } else {
+                                Log.e(TAG, "ID token is null")
+                                null
+                            }
+                        } catch (e: GoogleIdTokenParsingException) {
+                            Log.e(TAG, "Received an invalid google id token response", e)
+                            null
+                        }
+                    } else {
+                        Log.e(TAG, "Unexpected type of credential: ${credential.type}")
+                        null
+                    }
+                }
+                else -> {
+                    Log.e(TAG, "Unexpected type of credential: ${credential::class.java.simpleName}")
+                    null
+                }
             }
-        } catch (e: ApiException) {
-            Log.e(TAG, "Sign-in failed: ${e.statusCode}", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling sign-in result", e)
             null
         }
     }
@@ -111,7 +180,16 @@ class AuthService(private val context: Context) {
      * Sign out and clear stored data
      */
     suspend fun signOut() {
-        googleSignInClient.signOut()
+        try {
+            // Clear credential state from all credential providers
+            credentialManager.clearCredentialState(
+                ClearCredentialStateRequest()
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing credential state", e)
+        }
+        
+        // Clear local stored data
         dataStore.edit { preferences ->
             preferences.remove(JWT_TOKEN_KEY)
             preferences.remove(USER_EMAIL_KEY)
