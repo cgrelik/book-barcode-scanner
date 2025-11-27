@@ -133,6 +133,10 @@ class BackendApi(private val authService: AuthService) {
         }
     }
 
+    suspend fun getBookByIsbn(isbn: String): Result<String> {
+        return get("/api/books/isbn/$isbn")
+    }
+
     /**
      * Create a book in the backend
      */

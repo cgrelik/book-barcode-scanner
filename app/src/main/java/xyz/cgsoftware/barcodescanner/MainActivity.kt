@@ -55,13 +55,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
-import org.chromium.net.CronetEngine
 import org.json.JSONArray
 import org.json.JSONObject
 import xyz.cgsoftware.barcodescanner.models.Book
 import xyz.cgsoftware.barcodescanner.services.AuthService
 import xyz.cgsoftware.barcodescanner.services.BackendApi
-import xyz.cgsoftware.barcodescanner.services.BooksApiRequestCallback
 import xyz.cgsoftware.barcodescanner.ui.LoginScreen
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
 import kotlinx.coroutines.launch
@@ -192,8 +190,6 @@ fun CameraPreviewWithAuth(
     val executor = remember { Executors.newSingleThreadExecutor() }
     var books by remember { mutableStateOf(setOf<Book>()) }
     var isbns by remember { mutableStateOf(setOf<String>()) }
-    val cronetEngine = remember { CronetEngine.Builder(context).build() }
-    val uriHandler = LocalUriHandler.current
     val backendApi = remember { BackendApi(authService) }
     val scope = rememberCoroutineScope()
 
@@ -216,7 +212,12 @@ fun CameraPreviewWithAuth(
                 }
                 for (barcode in barcodeResults) {
                     val value = barcode.rawValue
-                    val valid = value?.let { validChecksum13(it) } ?: false
+                    if (value == null) {
+                        Log.d("CameraPreview", "No value found for barcode")
+                        continue
+                    }
+
+                    val valid = value.let { validChecksum13(it) } ?: false
                     if (!valid) {
                         Log.d("CameraPreview", "Invalid barcode detected: $value")
                         continue
@@ -228,52 +229,53 @@ fun CameraPreviewWithAuth(
                     } else {
                         isbns = isbns.plus(value)
                         val scannedIsbn = value  // Store the scanned ISBN value
-                        val requestBuilder = cronetEngine.newUrlRequestBuilder(
-                            "https://www.googleapis.com/books/v1/volumes?q=isbn:$value",
-                            BooksApiRequestCallback { book ->
-                                Log.d("CameraPreview", "Book found: $value")
-                                books = books.plus( book )
-                                Log.d("CameraPreview", "Barcode detected: $value")
-                                
-                                // Push book to backend using the scanned ISBN
-                                scope.launch {
+                        
+                        // Check if book exists via backend API
+                        scope.launch {
+                            try {
+                                val result = backendApi.getBookByIsbn(scannedIsbn)
+                                result.onSuccess { responseBody ->
+                                    Log.d("CameraPreview", "Book found via backend: $scannedIsbn")
                                     try {
-                                        val result = backendApi.createBook(
-                                            title = book.title,
-                                            isbn = scannedIsbn,  // Use the scanned ISBN value
-                                            thumbnail = book.thumbnail
-                                        )
-                                        result.onSuccess { responseBody ->
-                                            Log.d("CameraPreview", "Successfully pushed book to backend: ${book.title}")
-                                            // Parse response to get the book ID and update the local book
-                                            try {
-                                                val jsonResponse = JSONObject(responseBody)
-                                                val bookId = jsonResponse.getString("id")
-                                                // Remove old book and add new one with ID
-                                                books = books.minus(book).plus(
-                                                    Book(
-                                                        isbn13 = book.isbn13,
-                                                        isbn10 = book.isbn10,
-                                                        title = book.title,
-                                                        thumbnail = book.thumbnail,
-                                                        id = bookId
-                                                    )
-                                                )
-                                            } catch (e: Exception) {
-                                                Log.e("CameraPreview", "Error parsing createBook response", e)
-                                            }
-                                        }.onFailure { exception ->
-                                            Log.e("CameraPreview", "Failed to push book to backend: ${book.title}", exception)
+                                        val jsonResponse = JSONObject(responseBody)
+                                        val bookId = jsonResponse.getString("id")
+                                        val title = jsonResponse.getString("title")
+                                        val isbn13 = if (jsonResponse.has("isbn13") && !jsonResponse.isNull("isbn13")) {
+                                            jsonResponse.getString("isbn13")
+                                        } else {
+                                            ""
                                         }
+                                        val isbn10 = if (jsonResponse.has("isbn10") && !jsonResponse.isNull("isbn10")) {
+                                            jsonResponse.getString("isbn10")
+                                        } else {
+                                            ""
+                                        }
+                                        val thumbnail = if (jsonResponse.has("thumbnail") && !jsonResponse.isNull("thumbnail")) {
+                                            jsonResponse.getString("thumbnail")
+                                        } else {
+                                            null
+                                        }
+                                        
+                                        val book = Book(
+                                            isbn13 = isbn13,
+                                            isbn10 = isbn10,
+                                            title = title,
+                                            thumbnail = thumbnail,
+                                            id = bookId
+                                        )
+                                        
+                                        books = books.plus(book)
+                                        Log.d("CameraPreview", "Successfully added book from backend: ${book.title}")
                                     } catch (e: Exception) {
-                                        Log.e("CameraPreview", "Error pushing book to backend: ${book.title}", e)
+                                        Log.e("CameraPreview", "Error parsing getBookByIsbn response", e)
                                     }
+                                }.onFailure { exception ->
+                                    Log.e("CameraPreview", "Failed to get book from backend for ISBN: $scannedIsbn", exception)
                                 }
-                            },
-                            executor
-                        )
-
-                        requestBuilder.build().start()
+                            } catch (e: Exception) {
+                                Log.e("CameraPreview", "Error getting book from backend: $scannedIsbn", e)
+                            }
+                        }
                     }
                     }
             }
