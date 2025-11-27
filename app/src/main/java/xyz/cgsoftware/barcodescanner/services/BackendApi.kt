@@ -136,13 +136,26 @@ class BackendApi(private val authService: AuthService) {
     /**
      * Create a book in the backend
      */
-    suspend fun createBook(title: String, isbn: String? = null, author: String? = null, description: String? = null): Result<String> {
-        val requestBody = gson.toJson(mapOf(
-            "title" to title,
-            "isbn" to (isbn ?: ""),
-            "author" to (author ?: ""),
-            "description" to (description ?: "")
-        ))
+    suspend fun createBook(title: String, isbn: String? = null, author: String? = null, description: String? = null, thumbnail: String? = null): Result<String> {
+        val requestBodyMap = mutableMapOf<String, Any>(
+            "title" to title
+        )
+        
+        // Only include fields if they're not null/empty
+        if (!isbn.isNullOrEmpty()) {
+            requestBodyMap["isbn"] = isbn
+        }
+        if (!author.isNullOrEmpty()) {
+            requestBodyMap["author"] = author
+        }
+        if (!description.isNullOrEmpty()) {
+            requestBodyMap["description"] = description
+        }
+        if (!thumbnail.isNullOrEmpty()) {
+            requestBodyMap["thumbnail"] = thumbnail
+        }
+        
+        val requestBody = gson.toJson(requestBodyMap)
         return post("/api/books", requestBody)
     }
 
@@ -151,6 +164,33 @@ class BackendApi(private val authService: AuthService) {
      */
     suspend fun listBooks(): Result<String> {
         return get("/api/books")
+    }
+
+    /**
+     * Delete a book from the user's collection
+     */
+    suspend fun deleteBook(bookId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val url = "$baseUrl/api/books/$bookId"
+            val request = Request.Builder()
+                .url(url)
+                .delete()
+                .build()
+            
+            val response = client.newCall(request).execute()
+            
+            if (response.isSuccessful) {
+                Log.d(TAG, "Successfully deleted book $bookId")
+                Result.success(Unit)
+            } else {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                Log.e(TAG, "DELETE request failed: ${response.code} - $errorBody")
+                Result.failure(IOException("Request failed: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error making DELETE request", e)
+            Result.failure(e)
+        }
     }
 
     /**

@@ -56,6 +56,8 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import org.chromium.net.CronetEngine
+import org.json.JSONArray
+import org.json.JSONObject
 import xyz.cgsoftware.barcodescanner.models.Book
 import xyz.cgsoftware.barcodescanner.services.AuthService
 import xyz.cgsoftware.barcodescanner.services.BackendApi
@@ -192,6 +194,8 @@ fun CameraPreviewWithAuth(
     var isbns by remember { mutableStateOf(setOf<String>()) }
     val cronetEngine = remember { CronetEngine.Builder(context).build() }
     val uriHandler = LocalUriHandler.current
+    val backendApi = remember { BackendApi(authService) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(cameraProviderFuture) {
         Log.d("CameraPreview", "LaunchedEffect called")
@@ -223,12 +227,48 @@ fun CameraPreviewWithAuth(
                         continue
                     } else {
                         isbns = isbns.plus(value)
+                        val scannedIsbn = value  // Store the scanned ISBN value
                         val requestBuilder = cronetEngine.newUrlRequestBuilder(
                             "https://www.googleapis.com/books/v1/volumes?q=isbn:$value",
                             BooksApiRequestCallback { book ->
                                 Log.d("CameraPreview", "Book found: $value")
                                 books = books.plus( book )
                                 Log.d("CameraPreview", "Barcode detected: $value")
+                                
+                                // Push book to backend using the scanned ISBN
+                                scope.launch {
+                                    try {
+                                        val result = backendApi.createBook(
+                                            title = book.title,
+                                            isbn = scannedIsbn,  // Use the scanned ISBN value
+                                            thumbnail = book.thumbnail
+                                        )
+                                        result.onSuccess { responseBody ->
+                                            Log.d("CameraPreview", "Successfully pushed book to backend: ${book.title}")
+                                            // Parse response to get the book ID and update the local book
+                                            try {
+                                                val jsonResponse = JSONObject(responseBody)
+                                                val bookId = jsonResponse.getString("id")
+                                                // Remove old book and add new one with ID
+                                                books = books.minus(book).plus(
+                                                    Book(
+                                                        isbn13 = book.isbn13,
+                                                        isbn10 = book.isbn10,
+                                                        title = book.title,
+                                                        thumbnail = book.thumbnail,
+                                                        id = bookId
+                                                    )
+                                                )
+                                            } catch (e: Exception) {
+                                                Log.e("CameraPreview", "Error parsing createBook response", e)
+                                            }
+                                        }.onFailure { exception ->
+                                            Log.e("CameraPreview", "Failed to push book to backend: ${book.title}", exception)
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("CameraPreview", "Error pushing book to backend: ${book.title}", e)
+                                    }
+                                }
                             },
                             executor
                         )
@@ -265,6 +305,63 @@ fun CameraPreviewWithAuth(
         userName = authService.getUserName()
     }
     
+    // Load user's books on startup
+    LaunchedEffect(Unit) {
+        scope.launch {
+            try {
+                val result = backendApi.listBooks()
+                result.onSuccess { responseBody ->
+                    try {
+                        val jsonResponse = JSONObject(responseBody)
+                        val booksArray = jsonResponse.getJSONArray("books")
+                        val loadedBooks = mutableSetOf<Book>()
+                        val loadedIsbns = mutableSetOf<String>()
+                        
+                        for (i in 0 until booksArray.length()) {
+                            val bookJson = booksArray.getJSONObject(i)
+                            val id = bookJson.getString("id")
+                            val title = bookJson.getString("title")
+                            val isbn = if (bookJson.has("isbn") && !bookJson.isNull("isbn")) {
+                                bookJson.getString("isbn")
+                            } else {
+                                null
+                            }
+                            val thumbnail = if (bookJson.has("thumbnail") && !bookJson.isNull("thumbnail")) {
+                                bookJson.getString("thumbnail")
+                            } else {
+                                null
+                            }
+                            
+                            if (isbn != null && isbn.isNotEmpty()) {
+                                loadedIsbns.add(isbn)
+                                // Create Book object with ISBN from backend
+                                // We'll use the ISBN as isbn13, and leave isbn10 empty
+                                loadedBooks.add(Book(
+                                    isbn13 = isbn,
+                                    isbn10 = "",
+                                    title = title,
+                                    thumbnail = thumbnail,
+                                    id = id
+                                ))
+                            }
+                        }
+                        
+                        // Update state with loaded books and ISBNs
+                        books = loadedBooks
+                        isbns = loadedIsbns
+                        Log.d("CameraPreview", "Loaded ${loadedBooks.size} books from backend")
+                    } catch (e: Exception) {
+                        Log.e("CameraPreview", "Error parsing books response", e)
+                    }
+                }.onFailure { exception ->
+                    Log.e("CameraPreview", "Failed to load books from backend", exception)
+                }
+            } catch (e: Exception) {
+                Log.e("CameraPreview", "Error loading books from backend", e)
+            }
+        }
+    }
+    
     Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
         // App bar with user info and sign out
         TopAppBar(
@@ -291,7 +388,31 @@ fun CameraPreviewWithAuth(
         }
         LazyColumn(modifier = modifier.fillMaxWidth().weight(1.0f).padding(18.dp)) {
             items(books.toTypedArray()) { book ->
-                BookRow(book, onDismiss = { book -> books -= book})
+                BookRow(book, onDismiss = { dismissedBook ->
+                    // Remove from local state immediately for responsive UI
+                    books -= dismissedBook
+                    // Delete from server
+                    if (dismissedBook.id != null) {
+                        scope.launch {
+                            try {
+                                val result = backendApi.deleteBook(dismissedBook.id)
+                                result.onSuccess {
+                                    Log.d("CameraPreview", "Successfully deleted book from server: ${dismissedBook.title}")
+                                }.onFailure { exception ->
+                                    Log.e("CameraPreview", "Failed to delete book from server: ${dismissedBook.title}", exception)
+                                    // Re-add to local state if deletion failed
+                                    books = books.plus(dismissedBook)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("CameraPreview", "Error deleting book from server: ${dismissedBook.title}", e)
+                                // Re-add to local state if deletion failed
+                                books = books.plus(dismissedBook)
+                            }
+                        }
+                    } else {
+                        Log.w("CameraPreview", "Cannot delete book without ID: ${dismissedBook.title}")
+                    }
+                })
             }
         }
     }
