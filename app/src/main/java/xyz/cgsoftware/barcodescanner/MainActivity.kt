@@ -176,6 +176,7 @@ fun CameraPreviewWithAuth(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
@@ -190,8 +191,15 @@ fun CameraPreviewWithAuth(
     val executor = remember { Executors.newSingleThreadExecutor() }
     var books by remember { mutableStateOf(setOf<Book>()) }
     var isbns by remember { mutableStateOf(setOf<String>()) }
-    val backendApi = remember { BackendApi(authService) }
+    val backendApi = remember { 
+        BackendApi(authService, activity).also { it.setActivity(activity) }
+    }
     val scope = rememberCoroutineScope()
+    
+    // Update activity reference if it changes
+    LaunchedEffect(activity) {
+        backendApi.setActivity(activity)
+    }
 
     LaunchedEffect(cameraProviderFuture) {
         Log.d("CameraPreview", "LaunchedEffect called")

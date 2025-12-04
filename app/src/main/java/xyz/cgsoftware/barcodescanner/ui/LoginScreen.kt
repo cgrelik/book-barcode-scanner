@@ -20,8 +20,15 @@ fun LoginScreen(
     val context = LocalContext.current
     val activity = context as? ComponentActivity
     val authService = remember { AuthService(context) }
-    val backendApi = remember { BackendApi(authService) }
+    val backendApi = remember { 
+        BackendApi(authService, activity).also { it.setActivity(activity) }
+    }
     val scope = rememberCoroutineScope()
+    
+    // Update activity reference if it changes
+    LaunchedEffect(activity) {
+        backendApi.setActivity(activity)
+    }
     
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }

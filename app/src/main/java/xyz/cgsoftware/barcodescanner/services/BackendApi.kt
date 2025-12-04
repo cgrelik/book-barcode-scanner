@@ -1,5 +1,6 @@
 package xyz.cgsoftware.barcodescanner.services
 
+import android.app.Activity
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
@@ -33,9 +34,64 @@ data class UserInfo(
     val name: String
 )
 
-class BackendApi(private val authService: AuthService) {
+class BackendApi(
+    private val authService: AuthService,
+    private var activity: Activity? = null
+) {
     private val gson = Gson()
     private val baseUrl = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
+    
+    /**
+     * Set the Activity reference for re-authentication
+     */
+    fun setActivity(activity: Activity?) {
+        this.activity = activity
+    }
+    
+    /**
+     * Attempt to re-authenticate silently using stored credentials
+     * Returns true if re-authentication was successful, false otherwise
+     */
+    private suspend fun attemptReAuthentication(): Boolean {
+        val currentActivity = activity
+        if (currentActivity == null) {
+            Log.w(TAG, "Cannot re-authenticate: Activity is null")
+            return false
+        }
+        
+        return try {
+            Log.d(TAG, "Attempting silent re-authentication...")
+            // Try to get a new ID token silently (with filterByAuthorizedAccounts = true)
+            val idToken = authService.signIn(currentActivity)
+            
+            if (idToken != null) {
+                // Exchange ID token for JWT
+                val authResult = exchangeIdTokenForJwt(idToken)
+                authResult.fold(
+                    onSuccess = { authResponse ->
+                        // Save new token and user info
+                        authService.saveToken(
+                            authResponse.token,
+                            authResponse.user.email,
+                            authResponse.user.name
+                        )
+                        Log.d(TAG, "Re-authentication successful")
+                        true
+                    },
+                    onFailure = { exception ->
+                        Log.e(TAG, "Re-authentication failed: ${exception.message}")
+                        false
+                    }
+                )
+            } else {
+                Log.w(TAG, "Re-authentication failed: Could not get ID token")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during re-authentication", e)
+            false
+        }
+    }
     
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -54,11 +110,8 @@ class BackendApi(private val authService: AuthService) {
                 
                 val response = chain.proceed(authenticatedRequest)
                 
-                // Handle 401 Unauthorized - token might be expired
-                if (response.code == 401) {
-                    Log.w(TAG, "Received 401, clearing token")
-                    kotlinx.coroutines.runBlocking { authService.clearToken() }
-                }
+                // Note: We don't handle 401 here anymore - it's handled at the method level
+                // to allow for async re-authentication and retry
                 
                 response
             }
@@ -103,7 +156,7 @@ class BackendApi(private val authService: AuthService) {
     }
 
     /**
-     * Make an authenticated GET request
+     * Make an authenticated GET request with automatic re-authentication on 401
      */
     suspend fun get(endpoint: String): Result<String> = withContext(Dispatchers.IO) {
         try {
@@ -113,7 +166,26 @@ class BackendApi(private val authService: AuthService) {
                 .get()
                 .build()
             
-            val response = client.newCall(request).execute()
+            var response = client.newCall(request).execute()
+            
+            // Handle 401 Unauthorized - attempt re-authentication and retry
+            if (response.code == 401) {
+                Log.w(TAG, "Received 401 for GET $endpoint, attempting re-authentication...")
+                response.close() // Close the response before attempting re-auth
+                
+                // Clear the old token
+                authService.clearToken()
+                
+                // Attempt re-authentication
+                if (attemptReAuthentication()) {
+                    // Retry the request with new token
+                    Log.d(TAG, "Re-authentication successful, retrying GET $endpoint")
+                    response = client.newCall(request).execute()
+                } else {
+                    Log.e(TAG, "Re-authentication failed for GET $endpoint")
+                    return@withContext Result.failure(IOException("Authentication failed: Please sign in again"))
+                }
+            }
             
             if (response.isSuccessful) {
                 val responseBody = response.body?.string()
@@ -171,7 +243,7 @@ class BackendApi(private val authService: AuthService) {
     }
 
     /**
-     * Delete a book from the user's collection
+     * Delete a book from the user's collection with automatic re-authentication on 401
      */
     suspend fun deleteBook(bookId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
@@ -181,7 +253,26 @@ class BackendApi(private val authService: AuthService) {
                 .delete()
                 .build()
             
-            val response = client.newCall(request).execute()
+            var response = client.newCall(request).execute()
+            
+            // Handle 401 Unauthorized - attempt re-authentication and retry
+            if (response.code == 401) {
+                Log.w(TAG, "Received 401 for DELETE book $bookId, attempting re-authentication...")
+                response.close() // Close the response before attempting re-auth
+                
+                // Clear the old token
+                authService.clearToken()
+                
+                // Attempt re-authentication
+                if (attemptReAuthentication()) {
+                    // Retry the request with new token
+                    Log.d(TAG, "Re-authentication successful, retrying DELETE book $bookId")
+                    response = client.newCall(request).execute()
+                } else {
+                    Log.e(TAG, "Re-authentication failed for DELETE book $bookId")
+                    return@withContext Result.failure(IOException("Authentication failed: Please sign in again"))
+                }
+            }
             
             if (response.isSuccessful) {
                 Log.d(TAG, "Successfully deleted book $bookId")
@@ -198,7 +289,7 @@ class BackendApi(private val authService: AuthService) {
     }
 
     /**
-     * Make an authenticated POST request
+     * Make an authenticated POST request with automatic re-authentication on 401
      */
     suspend fun post(endpoint: String, body: String): Result<String> = withContext(Dispatchers.IO) {
         try {
@@ -210,7 +301,31 @@ class BackendApi(private val authService: AuthService) {
                 .post(requestBody)
                 .build()
             
-            val response = client.newCall(request).execute()
+            var response = client.newCall(request).execute()
+            
+            // Handle 401 Unauthorized - attempt re-authentication and retry
+            if (response.code == 401) {
+                Log.w(TAG, "Received 401 for POST $endpoint, attempting re-authentication...")
+                response.close() // Close the response before attempting re-auth
+                
+                // Clear the old token
+                authService.clearToken()
+                
+                // Attempt re-authentication
+                if (attemptReAuthentication()) {
+                    // Retry the request with new token (need to recreate request body)
+                    val retryRequestBody = body.toRequestBody("application/json".toMediaType())
+                    val retryRequest = Request.Builder()
+                        .url(url)
+                        .post(retryRequestBody)
+                        .build()
+                    Log.d(TAG, "Re-authentication successful, retrying POST $endpoint")
+                    response = client.newCall(retryRequest).execute()
+                } else {
+                    Log.e(TAG, "Re-authentication failed for POST $endpoint")
+                    return@withContext Result.failure(IOException("Authentication failed: Please sign in again"))
+                }
+            }
             
             if (response.isSuccessful) {
                 val responseBody = response.body?.string()
