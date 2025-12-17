@@ -3,9 +3,9 @@ package xyz.cgsoftware.barcodescanner
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.AttributeSet
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,7 +16,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,8 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,7 +37,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilterNotNull
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,6 +51,11 @@ import xyz.cgsoftware.barcodescanner.services.BooksApiRequestCallback
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
 import java.util.concurrent.Executors
 import androidx.camera.core.Preview as CameraPreview
+
+enum class Screen {
+    BookList,
+    Scanner
+}
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -68,7 +72,45 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BarcodeScannerTheme {
-                CameraPreview()
+                var currentScreen by remember { mutableStateOf(Screen.BookList) }
+                var books by remember { mutableStateOf(setOf<Book>()) }
+                var isbns by remember { mutableStateOf(setOf<String>()) }
+
+                when (currentScreen) {
+                    Screen.BookList -> {
+                        BookListScreen(
+                            books = books,
+                            onNavigateToScanner = { currentScreen = Screen.Scanner },
+                            onDeleteBook = { book ->
+                                books = books - book
+                                // Also remove from isbns if we want to allow scanning again?
+                                // The current implementation tracks isbns separately.
+                                // If we delete a book, we probably want to be able to scan it again.
+                                // However, `isbns` stores the raw scanned value (ISBN13).
+                                // The Book object has isbn13.
+                                // Let's try to remove it from isbns set too.
+                                if (book.isbn13.isNotEmpty()) {
+                                    isbns = isbns - book.isbn13
+                                }
+                            }
+                        )
+                    }
+                    Screen.Scanner -> {
+                        ScannerScreen(
+                            books = books,
+                            isbns = isbns,
+                            onBookFound = { book -> books = books + book },
+                            onIsbnFound = { isbn -> isbns = isbns + isbn },
+                            onDeleteBook = { book ->
+                                books = books - book
+                                if (book.isbn13.isNotEmpty()) {
+                                    isbns = isbns - book.isbn13
+                                }
+                            },
+                            onNavigateBack = { currentScreen = Screen.BookList }
+                        )
+                    }
+                }
             }
         }
 
@@ -109,7 +151,15 @@ fun validChecksum13(isbn: String): Boolean {
 }
 
 @Composable
-fun CameraPreview(modifier: Modifier = Modifier) {
+fun ScannerScreen(
+    books: Set<Book>,
+    isbns: Set<String>,
+    onBookFound: (Book) -> Unit,
+    onIsbnFound: (String) -> Unit,
+    onDeleteBook: (Book) -> Unit,
+    onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -123,13 +173,14 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     }
     val scanner = remember { BarcodeScanning.getClient(scannerOptions) }
     val executor = remember { Executors.newSingleThreadExecutor() }
-    var books by remember { mutableStateOf(setOf<Book>()) }
-    var isbns by remember { mutableStateOf(setOf<String>()) }
     val cronetEngine = remember { CronetEngine.Builder(context).build() }
-    val uriHandler = LocalUriHandler.current
+
+    BackHandler {
+        onNavigateBack()
+    }
 
     LaunchedEffect(cameraProviderFuture) {
-        Log.d("CameraPreview", "LaunchedEffect called")
+        Log.d("ScannerScreen", "LaunchedEffect called")
         val cameraProvider = cameraProviderFuture.get()
         cameraController.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
         cameraController.imageAnalysisBackgroundExecutor = executor
@@ -142,28 +193,28 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             ) { result ->
                 val barcodeResults = result.getValue(scanner)
                 if (barcodeResults == null) {
-                    Log.d("CameraPreview", "No barcode found")
+                    Log.d("ScannerScreen", "No barcode found")
                     return@MlKitAnalyzer
                 }
                 for (barcode in barcodeResults) {
                     val value = barcode.rawValue
                     val valid = value?.let { validChecksum13(it) } ?: false
                     if (!valid) {
-                        Log.d("CameraPreview", "Invalid barcode detected: $value")
+                        Log.d("ScannerScreen", "Invalid barcode detected: $value")
                         continue
                     }
 
                     if (isbns.contains(value)) {
-                        Log.d("CameraPreview", "Duplicate barcode detected: $value")
+                        Log.d("ScannerScreen", "Duplicate barcode detected: $value")
                         continue
                     } else {
-                        isbns = isbns.plus(value)
+                        value?.let { onIsbnFound(it) }
                         val requestBuilder = cronetEngine.newUrlRequestBuilder(
                             "https://www.googleapis.com/books/v1/volumes?q=isbn:$value",
                             BooksApiRequestCallback { book ->
-                                Log.d("CameraPreview", "Book found: $value")
-                                books = books.plus( book )
-                                Log.d("CameraPreview", "Barcode detected: $value")
+                                Log.d("ScannerScreen", "Book found: $value")
+                                onBookFound(book)
+                                Log.d("ScannerScreen", "Barcode detected: $value")
                             },
                             executor
                         )
@@ -184,7 +235,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             cameraProvider.unbindAll()
             cameraController.bindToLifecycle(lifecycleOwner)
         } catch (exc: Exception) {
-            Log.e("CameraPreview", "Use case binding failed", exc)
+            Log.e("ScannerScreen", "Use case binding failed", exc)
         }
     }
 
@@ -195,6 +246,9 @@ fun CameraPreview(modifier: Modifier = Modifier) {
         }
     }
     Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
+        Button(onClick = onNavigateBack, modifier = Modifier.padding(8.dp)) {
+            Text("Back to List")
+        }
         Column(modifier = modifier.height(400.dp).fillMaxWidth()) {
             AndroidView(
                 factory = { previewView },
@@ -203,7 +257,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
         }
         LazyColumn(modifier = modifier.fillMaxWidth().weight(1.0f).padding(18.dp)) {
             items(books.toTypedArray()) { book ->
-                BookRow(book, onDismiss = { book -> books -= book})
+                BookRow(book, onDismiss = onDeleteBook)
             }
         }
     }
