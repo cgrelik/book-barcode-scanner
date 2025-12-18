@@ -3,9 +3,9 @@ package xyz.cgsoftware.barcodescanner
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.AttributeSet
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,28 +16,22 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilterNotNull
 import androidx.compose.ui.viewinterop.AndroidView
@@ -51,43 +45,44 @@ import xyz.cgsoftware.barcodescanner.models.Book
 import xyz.cgsoftware.barcodescanner.services.BooksApiRequestCallback
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
 import java.util.concurrent.Executors
-import androidx.camera.core.Preview as CameraPreview
+import androidx.camera.core.Preview as CameraXPreview
+
+private enum class AppScreen {
+    Books,
+    Scanner,
+}
 
 class MainActivity : ComponentActivity() {
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (!isGranted) {
-            // Handle permission denial
-            Log.e("MainActivity", "Camera permission denied")
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             BarcodeScannerTheme {
-                CameraPreview()
-            }
-        }
+                var screen by remember { mutableStateOf(AppScreen.Books) }
+                var books by remember { mutableStateOf(setOf<Book>()) }
+                var scannedIsbns by remember { mutableStateOf(setOf<String>()) }
 
-        requestCameraPermission()
-    }
+                val sortedBooks = remember(books) { books.sortedBy { it.title } }
+                val removeBook: (Book) -> Unit = { book ->
+                    books = books - book
+                    scannedIsbns = scannedIsbns - book.isbn13
+                }
 
-    private fun requestCameraPermission() {
-        when {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                Log.i("MainActivity", "Camera permission granted")
-            }
-            shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) -> {
-                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-            else -> {
-                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+                when (screen) {
+                    AppScreen.Books -> BooksScreen(
+                        books = sortedBooks,
+                        onRemoveBook = removeBook,
+                        onOpenScanner = { screen = AppScreen.Scanner },
+                    )
+                    AppScreen.Scanner -> ScannerScreen(
+                        books = sortedBooks,
+                        scannedIsbns = scannedIsbns,
+                        onRemoveBook = removeBook,
+                        onOpenBooks = { screen = AppScreen.Books },
+                        onIsbnScanned = { isbn -> scannedIsbns = scannedIsbns + isbn },
+                        onBookFound = { book -> books = books + book },
+                    )
+                }
             }
         }
     }
@@ -109,9 +104,46 @@ fun validChecksum13(isbn: String): Boolean {
 }
 
 @Composable
-fun CameraPreview(modifier: Modifier = Modifier) {
+fun CameraPreview(
+    scannedIsbns: Set<String>,
+    onIsbnScanned: (String) -> Unit,
+    onBookFound: (Book) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasCameraPermission = isGranted
+        if (!isGranted) {
+            Log.e("CameraPreview", "Camera permission denied")
+        }
+    }
+
+    if (!hasCameraPermission) {
+        Column(
+            modifier = modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Camera permission is required to scan barcodes.")
+            Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                Text("Grant camera permission")
+            }
+        }
+        return
+    }
+
+    val latestScannedIsbns by rememberUpdatedState(scannedIsbns)
+    val latestOnIsbnScanned by rememberUpdatedState(onIsbnScanned)
+    val latestOnBookFound by rememberUpdatedState(onBookFound)
 
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val previewView = remember { PreviewView(context) }
@@ -123,22 +155,20 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     }
     val scanner = remember { BarcodeScanning.getClient(scannerOptions) }
     val executor = remember { Executors.newSingleThreadExecutor() }
-    var books by remember { mutableStateOf(setOf<Book>()) }
-    var isbns by remember { mutableStateOf(setOf<String>()) }
     val cronetEngine = remember { CronetEngine.Builder(context).build() }
-    val uriHandler = LocalUriHandler.current
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
 
-    LaunchedEffect(cameraProviderFuture) {
+    LaunchedEffect(cameraProviderFuture, hasCameraPermission) {
         Log.d("CameraPreview", "LaunchedEffect called")
         val cameraProvider = cameraProviderFuture.get()
         cameraController.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
         cameraController.imageAnalysisBackgroundExecutor = executor
         cameraController.setImageAnalysisAnalyzer(
-            ContextCompat.getMainExecutor(context),
+            mainExecutor,
             MlKitAnalyzer(
                 listOf(scanner),
                 COORDINATE_SYSTEM_VIEW_REFERENCED,
-                ContextCompat.getMainExecutor(context)
+                mainExecutor
             ) { result ->
                 val barcodeResults = result.getValue(scanner)
                 if (barcodeResults == null) {
@@ -153,17 +183,18 @@ fun CameraPreview(modifier: Modifier = Modifier) {
                         continue
                     }
 
-                    if (isbns.contains(value)) {
+                    if (latestScannedIsbns.contains(value)) {
                         Log.d("CameraPreview", "Duplicate barcode detected: $value")
                         continue
                     } else {
-                        isbns = isbns.plus(value)
+                        latestOnIsbnScanned(value)
                         val requestBuilder = cronetEngine.newUrlRequestBuilder(
                             "https://www.googleapis.com/books/v1/volumes?q=isbn:$value",
                             BooksApiRequestCallback { book ->
-                                Log.d("CameraPreview", "Book found: $value")
-                                books = books.plus( book )
-                                Log.d("CameraPreview", "Barcode detected: $value")
+                                mainExecutor.execute {
+                                    Log.d("CameraPreview", "Book found: $value")
+                                    latestOnBookFound(book)
+                                }
                             },
                             executor
                         )
@@ -174,7 +205,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             }
         )
         previewView.controller = cameraController
-        CameraPreview.Builder().build().also {
+        CameraXPreview.Builder().build().also {
             it.surfaceProvider = previewView.surfaceProvider
         }
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
@@ -194,17 +225,9 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             executor.shutdown()
         }
     }
-    Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
-        Column(modifier = modifier.height(400.dp).fillMaxWidth()) {
-            AndroidView(
-                factory = { previewView },
-                modifier = modifier.height(200.dp).fillMaxWidth()
-            )
-        }
-        LazyColumn(modifier = modifier.fillMaxWidth().weight(1.0f).padding(18.dp)) {
-            items(books.toTypedArray()) { book ->
-                BookRow(book, onDismiss = { book -> books -= book})
-            }
-        }
-    }
+
+    AndroidView(
+        factory = { previewView },
+        modifier = modifier,
+    )
 }
