@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -22,7 +24,11 @@ fun BooksScreen(
     onOpenScanner: () -> Unit,
 ) {
     Column(
-        modifier = modifier.fillMaxSize().padding(16.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Button(onClick = onOpenScanner, modifier = Modifier.fillMaxWidth()) {
