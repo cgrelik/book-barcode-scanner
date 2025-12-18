@@ -1,11 +1,9 @@
 package xyz.cgsoftware.barcodescanner
 
-import android.R.attr.onClick
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -13,10 +11,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
 import androidx.compose.material.icons.filled.BrokenImage
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -34,6 +30,11 @@ import xyz.cgsoftware.barcodescanner.ui.theme.Typography
 @Composable
 fun BookRow(book: Book, modifier: Modifier = Modifier, onDismiss: (book: Book) -> Unit = {}) {
     val uriHandler = LocalUriHandler.current
+    val amazonId = when {
+        book.isbn10.isNotBlank() -> book.isbn10
+        book.isbn13.isNotBlank() && !book.isbn13.startsWith("missing-isbn-") -> book.isbn13
+        else -> null
+    }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = {
             if (it == SwipeToDismissBoxValue.StartToEnd) {
@@ -65,7 +66,9 @@ fun BookRow(book: Book, modifier: Modifier = Modifier, onDismiss: (book: Book) -
         Row(modifier
             .fillMaxWidth()
             .height(80.dp)
-            .clickable { uriHandler.openUri("https://amazon.com/dp/${book.isbn10}") }) {
+            .clickable(enabled = amazonId != null) {
+                uriHandler.openUri("https://amazon.com/dp/$amazonId")
+            }) {
             if (book.thumbnail != null) {
                 AsyncImage(
                     model = book.thumbnail,

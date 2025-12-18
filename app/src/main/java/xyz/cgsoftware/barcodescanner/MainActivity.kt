@@ -3,7 +3,6 @@ package xyz.cgsoftware.barcodescanner
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.AttributeSet
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,7 +15,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,14 +25,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,7 +43,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilterNotNull
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,16 +51,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
-import org.json.JSONArray
 import org.json.JSONObject
 import xyz.cgsoftware.barcodescanner.models.Book
 import xyz.cgsoftware.barcodescanner.services.AuthService
 import xyz.cgsoftware.barcodescanner.services.BackendApi
-import xyz.cgsoftware.barcodescanner.ui.LoginScreen
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
+import xyz.cgsoftware.barcodescanner.ui.LoginScreen
+import xyz.cgsoftware.barcodescanner.ui.UserBooksScreen
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.Executors
 import androidx.camera.core.Preview as CameraPreview
 
@@ -108,6 +102,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class AppScreen {
+    MyBooks,
+    Scanner,
+}
+
 fun validChecksum13(isbn: String): Boolean {
     if (isbn.length != 13) {
         return false
@@ -126,9 +125,18 @@ fun validChecksum13(isbn: String): Boolean {
 @Composable
 fun AppContent(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val authService = remember { AuthService(context) }
     var isAuthenticated by remember { mutableStateOf<Boolean?>(null) }
     val scope = rememberCoroutineScope()
+    var screen by remember { mutableStateOf(AppScreen.MyBooks) }
+    val backendApi = remember {
+        BackendApi(authService, activity).also { it.setActivity(activity) }
+    }
+
+    LaunchedEffect(activity) {
+        backendApi.setActivity(activity)
+    }
 
     // Check authentication state on startup
     LaunchedEffect(Unit) {
@@ -150,33 +158,51 @@ fun AppContent(modifier: Modifier = Modifier) {
             LoginScreen(
                 onLoginSuccess = {
                     isAuthenticated = true
+                    screen = AppScreen.MyBooks
                 }
             )
         }
         true -> {
-            // Show camera preview with sign out option
-            CameraPreviewWithAuth(
-                authService = authService,
-                onSignOut = {
-                    scope.launch {
-                        authService.signOut()
-                        isAuthenticated = false
-                    }
+            val onSignOut = {
+                scope.launch {
+                    authService.signOut()
+                    isAuthenticated = false
+                    screen = AppScreen.MyBooks
                 }
-            )
+            }
+
+            when (screen) {
+                AppScreen.MyBooks -> {
+                    UserBooksScreen(
+                        authService = authService,
+                        backendApi = backendApi,
+                        onSignOut = onSignOut,
+                        onNavigateToScanner = { screen = AppScreen.Scanner },
+                    )
+                }
+                AppScreen.Scanner -> {
+                    ScannerScreen(
+                        authService = authService,
+                        backendApi = backendApi,
+                        onSignOut = onSignOut,
+                        onNavigateToMyBooks = { screen = AppScreen.MyBooks },
+                    )
+                }
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CameraPreviewWithAuth(
+fun ScannerScreen(
     authService: AuthService,
+    backendApi: BackendApi,
     onSignOut: () -> Unit,
+    onNavigateToMyBooks: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val activity = context as? ComponentActivity
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
@@ -191,15 +217,7 @@ fun CameraPreviewWithAuth(
     val executor = remember { Executors.newSingleThreadExecutor() }
     var books by remember { mutableStateOf(setOf<Book>()) }
     var isbns by remember { mutableStateOf(setOf<String>()) }
-    val backendApi = remember { 
-        BackendApi(authService, activity).also { it.setActivity(activity) }
-    }
     val scope = rememberCoroutineScope()
-    
-    // Update activity reference if it changes
-    LaunchedEffect(activity) {
-        backendApi.setActivity(activity)
-    }
 
     LaunchedEffect(cameraProviderFuture) {
         Log.d("CameraPreview", "LaunchedEffect called")
@@ -375,7 +393,7 @@ fun CameraPreviewWithAuth(
     Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
         // App bar with user info and sign out
         TopAppBar(
-            title = { Text("Book Scanner") },
+            title = { Text("Scanner") },
             actions = {
                 if (userName != null) {
                     Text(
@@ -383,6 +401,9 @@ fun CameraPreviewWithAuth(
                         modifier = Modifier.padding(horizontal = 16.dp),
                         style = MaterialTheme.typography.bodyMedium
                     )
+                }
+                TextButton(onClick = onNavigateToMyBooks) {
+                    Text("My Books")
                 }
                 TextButton(onClick = onSignOut) {
                     Text("Sign Out")
