@@ -29,6 +29,9 @@ android {
         }
 
         buildConfigField("String", "GOOGLE_API_KEY", "\"${localProperties.getProperty("GOOGLE_API_KEY", "")}\"")
+        buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"${localProperties.getProperty("GOOGLE_OAUTH_CLIENT_ID", "")}\"")
+        buildConfigField("String", "BACKEND_BASE_URL", "\"${localProperties.getProperty("BACKEND_BASE_URL", "http://10.0.2.2:3000")}\"")
+        signingConfig = signingConfigs.getByName("debug")
     }
 
     buildTypes {
@@ -74,6 +77,23 @@ dependencies {
     implementation(libs.coil3.coil.compose)
     implementation(libs.coil3.coil.network.okhttp)
     implementation(libs.androidx.material.icons.extended)
+
+    // OAuth and Authentication
+    implementation(libs.play.services.auth)
+    
+    // Credential Manager for Sign in with Google
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.googleid)
+    
+    // DataStore for secure token storage
+    implementation(libs.androidx.datastore.preferences)
+    
+    // OkHttp for authenticated API calls
+    implementation(libs.okhttp)
+    
+    // Gson for JSON parsing
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
