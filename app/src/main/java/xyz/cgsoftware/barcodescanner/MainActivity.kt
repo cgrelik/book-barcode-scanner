@@ -60,6 +60,7 @@ import org.json.JSONObject
 import xyz.cgsoftware.barcodescanner.models.Book
 import xyz.cgsoftware.barcodescanner.services.AuthService
 import xyz.cgsoftware.barcodescanner.services.BackendApi
+import xyz.cgsoftware.barcodescanner.ui.BooksListView
 import xyz.cgsoftware.barcodescanner.ui.LoginScreen
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
 import kotlinx.coroutines.launch
@@ -154,8 +155,8 @@ fun AppContent(modifier: Modifier = Modifier) {
             )
         }
         true -> {
-            // Show camera preview with sign out option
-            CameraPreviewWithAuth(
+            // Show books list view by default, with navigation to scanner
+            AuthenticatedContent(
                 authService = authService,
                 onSignOut = {
                     scope.launch {
@@ -168,11 +169,47 @@ fun AppContent(modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+enum class Screen {
+    BOOKS_LIST,
+    SCANNER
+}
+
 @Composable
-fun CameraPreviewWithAuth(
+fun AuthenticatedContent(
     authService: AuthService,
     onSignOut: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var currentScreen by remember { mutableStateOf(Screen.BOOKS_LIST) }
+    
+    when (currentScreen) {
+        Screen.BOOKS_LIST -> {
+            BooksListView(
+                authService = authService,
+                onSignOut = onSignOut,
+                onNavigateToScanner = {
+                    currentScreen = Screen.SCANNER
+                }
+            )
+        }
+        Screen.SCANNER -> {
+            ScannerScreen(
+                authService = authService,
+                onSignOut = onSignOut,
+                onNavigateToBooksList = {
+                    currentScreen = Screen.BOOKS_LIST
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScannerScreen(
+    authService: AuthService,
+    onSignOut: () -> Unit,
+    onNavigateToBooksList: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -373,10 +410,16 @@ fun CameraPreviewWithAuth(
     }
     
     Column(modifier = modifier.fillMaxSize().navigationBarsPadding().statusBarsPadding().systemBarsPadding()) {
-        // App bar with user info and sign out
+        // App bar with user info, books list button, and sign out
         TopAppBar(
-            title = { Text("Book Scanner") },
+            title = { Text("Scanner") },
             actions = {
+                Button(
+                    onClick = onNavigateToBooksList,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                ) {
+                    Text("My Books")
+                }
                 if (userName != null) {
                     Text(
                         text = userName!!,
