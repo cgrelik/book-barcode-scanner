@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,35 +22,41 @@ fun ScannerScreen(
     scannedIsbns: Set<String>,
     modifier: Modifier = Modifier,
     onRemoveBook: (Book) -> Unit,
-    onOpenBooks: () -> Unit,
     onIsbnScanned: (String) -> Unit,
-    onBookFound: (Book) -> Unit,
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .statusBarsPadding(),
+        verticalArrangement = Arrangement.Top,
     ) {
-        Button(onClick = onOpenBooks, modifier = Modifier.fillMaxWidth()) {
-            Text("View books")
-        }
-
+        // Camera preview edge-to-edge (no horizontal padding)
         CameraPreview(
-            modifier = Modifier.fillMaxWidth().height(260.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp),
             scannedIsbns = scannedIsbns,
             onIsbnScanned = onIsbnScanned,
-            onBookFound = onBookFound,
         )
 
+        // List below camera preview - explicitly positioned to prevent overlap
         if (books.isNotEmpty()) {
-            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 items(items = books, key = { it.isbn13 }) { book ->
                     BookRow(book = book, onDismiss = onRemoveBook)
                 }
             }
+        } else {
+            // Spacer to take remaining space when no books
+            androidx.compose.foundation.layout.Spacer(
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

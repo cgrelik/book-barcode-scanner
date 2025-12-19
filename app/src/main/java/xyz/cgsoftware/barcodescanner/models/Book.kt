@@ -1,6 +1,7 @@
 package xyz.cgsoftware.barcodescanner.models
 
-class Book(val isbn13: String = "",
+class Book(val id: String = "",
+           val isbn13: String = "",
            val isbn10: String = "",
            val title: String = "",
            val thumbnail: String? = "") {
