@@ -167,9 +167,12 @@ class BackendApiService(private val tokenStorage: TokenStorage) {
             return
         }
 
+        val requestBody = gson.toJson(mapOf("isbn" to isbn))
+            .toRequestBody(JSON_MEDIA_TYPE)
+
         val request = Request.Builder()
-            .url("$baseUrl/api/books/isbn/$isbn")
-            .get()
+            .url("$baseUrl/api/books/add")
+            .post(requestBody)
             .addHeader("Authorization", "Bearer $token")
             .build()
 
