@@ -80,7 +80,7 @@ class BooksApiRequestCallback(val onSuccess: (book: Book) -> Unit): UrlRequest.C
                     null
                 }
 
-                onSuccess(Book(isbn13, isbn10, title, thumbnail))
+                onSuccess(Book(id = "", isbn13, isbn10, title, thumbnail))
             }
         }
     }
