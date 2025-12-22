@@ -4,6 +4,7 @@ cameraCore = "1.4.2"
 coilCompose = "3.3.0"
 kotlin = "2.0.21"
 coreKtx = "1.17.0"
+credentials = "1.3.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
@@ -21,6 +22,7 @@ navigationCompose = "2.8.4"
 playServicesAuth = "21.2.0"
 okhttp = "4.12.0"
 gson = "2.10.1"
+googleid = "1.1.1"
 
 [libraries]
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraCore" }
@@ -46,6 +48,8 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3" 
 androidx-camera-mlkit-vision = { group = "androidx.camera", name = "camera-mlkit-vision", version.ref = "cameraMlkitVision" }
 gms-play-services-mlkit-barcode-scanning = { group = "com.google.android.gms", name = "play-services-mlkit-barcode-scanning", version.ref = "playServicesMlkitBarcodeScanningVersion" }
 play-services-cronet = { module = "com.google.android.gms:play-services-cronet", version.ref = "playServicesCronet" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 coil3-coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coilComposeVersion" }
 coil3-coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coilNetworkOkhttp" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
@@ -53,6 +57,7 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

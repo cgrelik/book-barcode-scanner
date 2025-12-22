@@ -8,12 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageAnalysis.COORDINATE_SYSTEM_VIEW_REFERENCED
@@ -47,8 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -56,17 +49,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilterNotNull
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.GetCredentialResponse
+import androidx.credentials.exceptions.ClearCredentialException
+import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.android.gms.auth.api.identity.Identity
-import com.google.android.gms.auth.api.identity.SignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
+import kotlinx.coroutines.launch
 import xyz.cgsoftware.barcodescanner.models.Book
+import xyz.cgsoftware.barcodescanner.models.Tag
 import xyz.cgsoftware.barcodescanner.services.BackendApiService
 import xyz.cgsoftware.barcodescanner.services.TokenStorage
 import xyz.cgsoftware.barcodescanner.ui.theme.BarcodeScannerTheme
@@ -102,48 +105,43 @@ class MainActivity : ComponentActivity() {
                 
                 var books by remember { mutableStateOf(setOf<Book>()) }
                 var scannedIsbns by remember { mutableStateOf(setOf<String>()) }
+                var tags by remember { mutableStateOf(emptyList<Tag>()) }
+                var selectedTagIds by remember { mutableStateOf(emptySet<String>()) }
+                var defaultTagIds by remember { mutableStateOf(emptySet<String>()) }
                 var isLoggedIn by remember { mutableStateOf(tokenStorage.hasToken()) }
 
                 val sortedBooks = remember(books) { books.sortedBy { it.title } }
-                
-                // Google Sign-In setup
-                val googleSignInClient = remember {
-                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                        .requestIdToken(BuildConfig.GOOGLE_OAUTH_CLIENT_ID)
-                        .requestEmail()
+
+                val credentialManager = remember { CredentialManager.create(context) }
+
+                val googleIdOption = remember {
+                    GetGoogleIdOption.Builder()
+                        .setServerClientId(BuildConfig.GOOGLE_OAUTH_CLIENT_ID)
+                        .setFilterByAuthorizedAccounts(true)
                         .build()
-                    GoogleSignIn.getClient(context, gso)
                 }
 
-                val signInLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.StartActivityForResult()
-                ) { result ->
-                    if (result.resultCode == RESULT_OK) {
-                        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                        try {
-                            val account = task.getResult(ApiException::class.java)
-                            val idToken = account?.idToken
-                            if (idToken != null) {
-                                val token: String = idToken
-                                apiService.authenticateWithGoogle(token) { authResult ->
-                                    authResult.onSuccess {
-                                        // Callback is already on main thread, just update state
-                                        isLoggedIn = true
-                                        // Fetch user's books after login
-                                        apiService.getUserBooks { booksResult ->
-                                            booksResult.onSuccess { fetchedBooks ->
-                                                // Callback is already on main thread
-                                                books = fetchedBooks.toSet()
-                                                scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
-                                            }
-                                        }
-                                    }.onFailure { e ->
-                                        Log.e("MainActivity", "Authentication failed", e)
-                                    }
+                val googleSignInRequest = remember {
+                    GetCredentialRequest.Builder()
+                        .addCredentialOption(googleIdOption)
+                        .build()
+                }
+
+                val handleGoogleSignInToken: (String) -> Unit = { token ->
+                    apiService.authenticateWithGoogle(token) { authResult ->
+                        authResult.onSuccess {
+                            navController.navigate(Routes.BOOKS)
+                            isLoggedIn = true
+                            apiService.getUserBooks { booksResult ->
+                                booksResult.onSuccess { fetchedBooks ->
+                                    books = fetchedBooks.toSet()
+                                    scannedIsbns =
+                                        fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }
+                                            .toSet()
                                 }
                             }
-                        } catch (e: ApiException) {
-                            Log.e("MainActivity", "Sign in failed", e)
+                        }.onFailure { e ->
+                            Log.e("MainActivity", "Authentication failed", e)
                         }
                     }
                 }
@@ -172,14 +170,50 @@ class MainActivity : ComponentActivity() {
 
                 // Fetch books on login
                 LaunchedEffect(isLoggedIn) {
-                    if (isLoggedIn && books.isEmpty()) {
-                        apiService.getUserBooks { result ->
-                            result.onSuccess { fetchedBooks ->
-                                books = fetchedBooks.toSet()
-                                scannedIsbns = fetchedBooks.map { it.isbn13 }.filter { it.isNotEmpty() }.toSet()
-                            }.onFailure { e ->
-                                Log.e("MainActivity", "Failed to fetch books", e)
-                            }
+                    if (isLoggedIn) {
+                        apiService.getTags { tagsResult ->
+                            tagsResult.fold(
+                                onSuccess = { fetchedTags ->
+                                    tags = fetchedTags
+                                    apiService.getPreferences { prefsResult ->
+                                        prefsResult.fold(
+                                            onSuccess = { prefs ->
+                                                val defaults = prefs.defaultTagIds.toSet()
+                                                defaultTagIds = defaults
+                                                selectedTagIds = defaults
+                                                apiService.getUserBooks(defaults.toList()) { booksResult ->
+                                                    booksResult.onSuccess { fetchedBooks ->
+                                                        books = fetchedBooks.toSet()
+                                                        scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
+                                                    }.onFailure { e ->
+                                                        Log.e("MainActivity", "Failed to fetch books", e)
+                                                    }
+                                                }
+                                            },
+                                            onFailure = { e ->
+                                                Log.e("MainActivity", "Failed to fetch preferences", e)
+                                                // Fallback to fetch all books
+                                                apiService.getUserBooks(emptyList()) { booksResult ->
+                                                    booksResult.onSuccess { fetchedBooks ->
+                                                        books = fetchedBooks.toSet()
+                                                        scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                },
+                                onFailure = { e ->
+                                    Log.e("MainActivity", "Failed to fetch tags", e)
+                                    // Fallback to fetch all books
+                                    apiService.getUserBooks(emptyList()) { booksResult ->
+                                        booksResult.onSuccess { fetchedBooks ->
+                                            books = fetchedBooks.toSet()
+                                            scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
+                                        }
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -200,8 +234,51 @@ class MainActivity : ComponentActivity() {
                             isLoggedIn = true
                         },
                         onSignInClick = {
-                            val signInIntent = googleSignInClient.signInIntent
-                            signInLauncher.launch(signInIntent)
+                            coroutineScope.launch {
+                                try {
+                                    val result: GetCredentialResponse =
+                                        credentialManager.getCredential(
+                                            context = context,
+                                            request = googleSignInRequest
+                                        )
+                                    val credential = result.credential
+                                    when (credential) {
+                                        is CustomCredential -> {
+                                            if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                                                try {
+                                                    val googleIdTokenCredential =
+                                                        GoogleIdTokenCredential.createFrom(
+                                                            credential.data
+                                                        )
+                                                    val idToken =
+                                                        googleIdTokenCredential.idToken
+                                                    handleGoogleSignInToken(idToken)
+                                                } catch (e: GoogleIdTokenParsingException) {
+                                                    Log.e(
+                                                        "MainActivity",
+                                                        "Received an invalid google id token response",
+                                                        e
+                                                    )
+                                                }
+                                            } else {
+                                                Log.e(
+                                                    "MainActivity",
+                                                    "Unexpected type of credential"
+                                                )
+                                            }
+                                        }
+
+                                        else -> {
+                                            Log.e(
+                                                "MainActivity",
+                                                "Unexpected credential type ${credential::class.java}"
+                                            )
+                                        }
+                                    }
+                                } catch (e: GetCredentialException) {
+                                    Log.e("MainActivity", "Sign in with Google failed", e)
+                                }
+                            }
                         }
                     )
                 } else {
@@ -239,6 +316,42 @@ class MainActivity : ComponentActivity() {
                             composable(Routes.BOOKS) {
                                 BooksScreen(
                                     books = sortedBooks,
+                                    tags = tags,
+                                    selectedTagIds = selectedTagIds,
+                                    onTagSelectionChanged = { newTags ->
+                                        selectedTagIds = newTags
+                                        apiService.getUserBooks(newTags.toList()) { result ->
+                                            result.onSuccess { fetchedBooks ->
+                                                books = fetchedBooks.toSet()
+                                                scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
+                                            }
+                                        }
+                                    },
+                                    onUpdateBookTags = { booksToUpdate, newTagNames ->
+                                        var completed = 0
+                                        if (booksToUpdate.isEmpty()) return@BooksScreen
+                                        
+                                        booksToUpdate.forEach { book ->
+                                            apiService.setBookTags(book.id, newTagNames) { result ->
+                                                completed++
+                                                if (completed == booksToUpdate.size) {
+                                                    // Refresh books
+                                                    apiService.getUserBooks(selectedTagIds.toList()) { res ->
+                                                        res.onSuccess { fetchedBooks ->
+                                                            books = fetchedBooks.toSet()
+                                                            scannedIsbns = fetchedBooks.mapNotNull { it.isbn13.takeIf { isbn -> isbn.isNotEmpty() } }.toSet()
+                                                        }
+                                                    }
+                                                    // Refresh tags (in case new ones created)
+                                                    apiService.getTags { res ->
+                                                        res.onSuccess { fetchedTags ->
+                                                            tags = fetchedTags
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
                                     onRemoveBook = removeBook,
                                     modifier = Modifier.padding(contentPadding)
                                         .background(MaterialTheme.colorScheme.background)
@@ -269,13 +382,64 @@ class MainActivity : ComponentActivity() {
                             }
                             composable(Routes.PROFILE) {
                                 ProfileScreen(
+                                    tags = tags,
+                                    defaultTagIds = defaultTagIds,
+                                    onUpdateDefaultTags = { names ->
+                                        val newIds = mutableListOf<String>()
+                                        val namesToProcess = names.toMutableList()
+                                        
+                                        fun processNext() {
+                                            if (namesToProcess.isEmpty()) {
+                                                apiService.updatePreferences(newIds) { result ->
+                                                    result.onSuccess { prefs ->
+                                                        defaultTagIds = prefs.defaultTagIds.toSet()
+                                                        apiService.getTags { res -> 
+                                                            res.onSuccess { tags = it }
+                                                        }
+                                                    }
+                                                }
+                                                return
+                                            }
+                                            val name = namesToProcess.removeAt(0)
+                                            val existing = tags.find { it.name.equals(name, ignoreCase = true) }
+                                            if (existing != null) {
+                                                newIds.add(existing.id)
+                                                processNext()
+                                            } else {
+                                                apiService.createTag(name) { result ->
+                                                    result.onSuccess { tag ->
+                                                        newIds.add(tag.id)
+                                                        processNext()
+                                                    }.onFailure {
+                                                        processNext()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        processNext()
+                                    },
                                     onSignOut = {
                                         // Clear token and sign out
                                         tokenStorage.clearToken()
-                                        googleSignInClient.signOut()
+                                        coroutineScope.launch {
+                                            try {
+                                                credentialManager.clearCredentialState(
+                                                    ClearCredentialStateRequest()
+                                                )
+                                            } catch (e: ClearCredentialException) {
+                                                Log.e(
+                                                    "MainActivity",
+                                                    "Failed to clear credential state",
+                                                    e
+                                                )
+                                            }
+                                        }
                                         isLoggedIn = false
                                         books = emptySet()
                                         scannedIsbns = emptySet()
+                                        tags = emptyList()
+                                        selectedTagIds = emptySet()
+                                        defaultTagIds = emptySet()
                                     },
                                     modifier = Modifier.padding(contentPadding)
                                         .background(MaterialTheme.colorScheme.background)
