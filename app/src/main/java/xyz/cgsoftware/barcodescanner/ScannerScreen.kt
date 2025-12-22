@@ -1,5 +1,6 @@
 package xyz.cgsoftware.barcodescanner
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,8 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -34,7 +34,7 @@ fun ScannerScreen(
         CameraPreview(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(300.dp),
+                .height(200.dp),
             scannedIsbns = scannedIsbns,
             onIsbnScanned = onIsbnScanned,
         )
@@ -45,7 +45,8 @@ fun ScannerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = false)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(vertical = 16.dp, horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(items = books, key = { it.isbn13 }) { book ->

@@ -21,6 +21,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
@@ -194,6 +196,7 @@ class MainActivity : ComponentActivity() {
                 if (!isLoggedIn) {
                     LoginScreen(
                         onLoginSuccess = {
+                            navController.navigate(Routes.BOOKS)
                             isLoggedIn = true
                         },
                         onSignInClick = {
@@ -238,6 +241,7 @@ class MainActivity : ComponentActivity() {
                                     books = sortedBooks,
                                     onRemoveBook = removeBook,
                                     modifier = Modifier.padding(contentPadding)
+                                        .background(MaterialTheme.colorScheme.background)
                                 )
                             }
                             composable(Routes.SCANNER) {
@@ -260,6 +264,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     },
+                                    modifier = Modifier.padding(contentPadding),
                                 )
                             }
                             composable(Routes.PROFILE) {
@@ -273,6 +278,7 @@ class MainActivity : ComponentActivity() {
                                         scannedIsbns = emptySet()
                                     },
                                     modifier = Modifier.padding(contentPadding)
+                                        .background(MaterialTheme.colorScheme.background)
                                 )
                             }
                         }
@@ -387,6 +393,7 @@ fun CameraPreview(
             }
         )
         previewView.controller = cameraController
+        previewView.setScaleType(PreviewView.ScaleType.FILL_CENTER)
         CameraXPreview.Builder().build().also {
             it.surfaceProvider = previewView.surfaceProvider
         }
