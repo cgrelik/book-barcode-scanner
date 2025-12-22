@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                 var tags by remember { mutableStateOf(emptyList<Tag>()) }
                 var selectedTagIds by remember { mutableStateOf(emptySet<String>()) }
                 var defaultTagIds by remember { mutableStateOf(emptySet<String>()) }
+                var scannerAutoTagNames by remember { mutableStateOf(emptySet<String>()) }
                 var isLoggedIn by remember { mutableStateOf(tokenStorage.hasToken()) }
 
                 val sortedBooks = remember(books) { books.sortedBy { it.title } }
@@ -147,18 +148,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val removeBook: (Book) -> Unit = { book ->
+                    val removeLocal: () -> Unit = {
+                        books = books.filterNot { it.id.isNotEmpty() && it.id == book.id }.toSet()
+                        scannedIsbns = scannedIsbns - book.isbn13
+                    }
                     if (book.id.isNotEmpty()) {
                         // Remove from backend
                         apiService.removeBook(book.id) { result ->
                             result.onSuccess {
-                                // Remove from local state
-                                books = books - book
-                                scannedIsbns = scannedIsbns - book.isbn13
+                                removeLocal()
                             }.onFailure { e ->
                                 Log.e("MainActivity", "Failed to remove book from backend", e)
                                 // Still remove from local state for better UX
-                                books = books - book
-                                scannedIsbns = scannedIsbns - book.isbn13
+                                removeLocal()
                             }
                         }
                     } else {
@@ -361,6 +363,8 @@ class MainActivity : ComponentActivity() {
                                 ScannerScreen(
                                     books = sortedBooks,
                                     scannedIsbns = scannedIsbns,
+                                    availableTags = tags,
+                                    autoTagNames = scannerAutoTagNames,
                                     onRemoveBook = removeBook,
                                     onIsbnScanned = { isbn ->
                                         // Mark as scanned to prevent duplicates
@@ -368,15 +372,41 @@ class MainActivity : ComponentActivity() {
                                         // Backend will verify ISBN and add the book
                                         apiService.addBookByIsbn(isbn) { result ->
                                             result.onSuccess { backendBook ->
-                                                // Book successfully verified and added to backend
-                                                books = books + backendBook
+                                                // Book successfully verified and added to backend (upsert by id)
+                                                books = books.filterNot { it.id.isNotEmpty() && it.id == backendBook.id }.toSet() + backendBook
                                                 Log.d("MainActivity", "Book verified and added to backend: ${backendBook.title}")
+
+                                                val autoNames = scannerAutoTagNames
+                                                    .map { it.trim() }
+                                                    .filter { it.isNotEmpty() }
+                                                    .toSet()
+
+                                                if (autoNames.isNotEmpty() && backendBook.id.isNotEmpty()) {
+                                                    val mergedNames = (backendBook.tags.map { it.name } + autoNames)
+                                                        .map { it.trim() }
+                                                        .filter { it.isNotEmpty() }
+                                                        .distinct()
+
+                                                    apiService.setBookTags(backendBook.id, mergedNames) { tagsResult ->
+                                                        tagsResult.onSuccess { updatedTags ->
+                                                            val updatedBook = backendBook.copy(tags = updatedTags)
+                                                            books = books.filterNot { it.id.isNotEmpty() && it.id == updatedBook.id }.toSet() + updatedBook
+                                                            // Refresh tag list in case new tags were created from the scanner dialog
+                                                            apiService.getTags { res ->
+                                                                res.onSuccess { fetchedTags -> tags = fetchedTags }
+                                                            }
+                                                        }.onFailure { e ->
+                                                            Log.e("MainActivity", "Failed to auto-tag book ${backendBook.id}", e)
+                                                        }
+                                                    }
+                                                }
                                             }.onFailure { e ->
                                                 Log.e("MainActivity", "Failed to verify/add book to backend: $isbn", e)
                                                 // Still mark as scanned to prevent retry spam
                                             }
                                         }
                                     },
+                                    onAutoTagNamesChanged = { newNames -> scannerAutoTagNames = newNames },
                                     modifier = Modifier.padding(contentPadding),
                                 )
                             }

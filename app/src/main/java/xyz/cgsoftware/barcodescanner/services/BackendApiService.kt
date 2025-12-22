@@ -72,6 +72,12 @@ data class SetBookTagsRequest(
     @SerializedName("tags") val tags: List<String>
 )
 
+data class SetBookTagsResponse(
+    @SerializedName("book_id") val bookId: String,
+    @SerializedName("tags") val tags: List<Tag>,
+    @SerializedName("count") val count: Int
+)
+
 data class UserPreference(
     @SerializedName("user_id") val userId: String,
     @SerializedName("default_tag_ids") val defaultTagIds: List<String>,
@@ -365,7 +371,7 @@ class BackendApiService(private val tokenStorage: TokenStorage) {
         })
     }
 
-    fun setBookTags(bookId: String, tags: List<String>, callback: (Result<Unit>) -> Unit) {
+    fun setBookTags(bookId: String, tags: List<String>, callback: (Result<List<Tag>>) -> Unit) {
         val token = tokenStorage.getToken()
         if (token == null) {
             callback(Result.failure(IOException("No authentication token")))
@@ -387,7 +393,13 @@ class BackendApiService(private val tokenStorage: TokenStorage) {
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (it.isSuccessful) {
-                        mainHandler.post { callback(Result.success(Unit)) }
+                        try {
+                            val body = it.body?.string() ?: ""
+                            val parsed = gson.fromJson(body, SetBookTagsResponse::class.java)
+                            mainHandler.post { callback(Result.success(parsed.tags)) }
+                        } catch (e: Exception) {
+                            mainHandler.post { callback(Result.failure(e)) }
+                        }
                     } else {
                         if (it.code == 401) tokenStorage.clearToken()
                         mainHandler.post { callback(Result.failure(IOException("Failed to set tags: ${it.code}"))) }
