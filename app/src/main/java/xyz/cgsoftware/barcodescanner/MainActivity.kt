@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                 
                 var books by remember { mutableStateOf(setOf<Book>()) }
                 var scannedIsbns by remember { mutableStateOf(setOf<String>()) }
+                var recentScannedBooks by remember { mutableStateOf(listOf<Book>()) }
                 var tags by remember { mutableStateOf(emptyList<Tag>()) }
                 var selectedTagIds by remember { mutableStateOf(emptySet<String>()) }
                 var defaultTagIds by remember { mutableStateOf(emptySet<String>()) }
@@ -151,6 +152,10 @@ class MainActivity : ComponentActivity() {
                     val removeLocal: () -> Unit = {
                         books = books.filterNot { it.id.isNotEmpty() && it.id == book.id }.toSet()
                         scannedIsbns = scannedIsbns - book.isbn13
+                        recentScannedBooks = recentScannedBooks.filterNot { recent ->
+                            (book.id.isNotEmpty() && recent.id == book.id) ||
+                                (book.id.isEmpty() && recent.isbn13 == book.isbn13)
+                        }
                     }
                     if (book.id.isNotEmpty()) {
                         // Remove from backend
@@ -361,7 +366,7 @@ class MainActivity : ComponentActivity() {
                             }
                             composable(Routes.SCANNER) {
                                 ScannerScreen(
-                                    books = sortedBooks,
+                                    books = recentScannedBooks,
                                     scannedIsbns = scannedIsbns,
                                     availableTags = tags,
                                     autoTagNames = scannerAutoTagNames,
@@ -375,6 +380,12 @@ class MainActivity : ComponentActivity() {
                                                 // Book successfully verified and added to backend (upsert by id)
                                                 books = books.filterNot { it.id.isNotEmpty() && it.id == backendBook.id }.toSet() + backendBook
                                                 Log.d("MainActivity", "Book verified and added to backend: ${backendBook.title}")
+                                                // Track recent scans for scanner list (most recent first, max 5)
+                                                recentScannedBooks =
+                                                    (listOf(backendBook) + recentScannedBooks.filterNot { b ->
+                                                        (backendBook.id.isNotEmpty() && b.id == backendBook.id) ||
+                                                            b.isbn13 == backendBook.isbn13
+                                                    }).take(5)
 
                                                 val autoNames = scannerAutoTagNames
                                                     .map { it.trim() }
@@ -391,6 +402,10 @@ class MainActivity : ComponentActivity() {
                                                         tagsResult.onSuccess { updatedTags ->
                                                             val updatedBook = backendBook.copy(tags = updatedTags)
                                                             books = books.filterNot { it.id.isNotEmpty() && it.id == updatedBook.id }.toSet() + updatedBook
+                                                            // Keep recent scan list in sync (don't reorder)
+                                                            recentScannedBooks = recentScannedBooks.map { b ->
+                                                                if ((updatedBook.id.isNotEmpty() && b.id == updatedBook.id) || b.isbn13 == updatedBook.isbn13) updatedBook else b
+                                                            }
                                                             // Refresh tag list in case new tags were created from the scanner dialog
                                                             apiService.getTags { res ->
                                                                 res.onSuccess { fetchedTags -> tags = fetchedTags }
@@ -407,6 +422,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onAutoTagNamesChanged = { newNames -> scannerAutoTagNames = newNames },
+                                    onLeaveScreen = { recentScannedBooks = emptyList() },
                                     modifier = Modifier.padding(contentPadding),
                                 )
                             }
@@ -467,6 +483,7 @@ class MainActivity : ComponentActivity() {
                                         isLoggedIn = false
                                         books = emptySet()
                                         scannedIsbns = emptySet()
+                                        recentScannedBooks = emptyList()
                                         tags = emptyList()
                                         selectedTagIds = emptySet()
                                         defaultTagIds = emptySet()

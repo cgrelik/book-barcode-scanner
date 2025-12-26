@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,8 +38,14 @@ fun ScannerScreen(
     onRemoveBook: (Book) -> Unit,
     onIsbnScanned: (String) -> Unit,
     onAutoTagNamesChanged: (Set<String>) -> Unit,
+    onLeaveScreen: () -> Unit,
 ) {
     var showAutoTagDialog by remember { mutableStateOf(false) }
+
+    // Clear "recently scanned" list when navigating away so coming back starts fresh.
+    DisposableEffect(Unit) {
+        onDispose { onLeaveScreen() }
+    }
 
     Column(
         modifier = modifier
