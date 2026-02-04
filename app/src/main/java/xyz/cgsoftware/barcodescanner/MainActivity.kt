@@ -32,6 +32,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -111,6 +114,7 @@ class MainActivity : ComponentActivity() {
                 var defaultTagIds by remember { mutableStateOf(emptySet<String>()) }
                 var scannerAutoTagNames by remember { mutableStateOf(emptySet<String>()) }
                 var isLoggedIn by remember { mutableStateOf(tokenStorage.hasToken()) }
+                val snackbarHostState = remember { SnackbarHostState() }
 
                 val sortedBooks = remember(books) { books.sortedBy { it.title } }
 
@@ -314,6 +318,9 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
+                        },
+                        snackbarHost = {
+                            SnackbarHost(hostState = snackbarHostState)
                         }
                     ) { contentPadding ->
                         NavHost(
@@ -417,6 +424,13 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             }.onFailure { e ->
                                                 Log.e("MainActivity", "Failed to verify/add book to backend: $isbn", e)
+                                                // Show toast notification when barcode fails to be identified
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        message = "Failed to identify barcode. The book may not be in the database.",
+                                                        duration = SnackbarDuration.Short
+                                                    )
+                                                }
                                                 // Still mark as scanned to prevent retry spam
                                             }
                                         }
