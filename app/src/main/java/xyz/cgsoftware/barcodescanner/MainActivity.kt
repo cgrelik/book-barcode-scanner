@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -114,6 +115,8 @@ class MainActivity : ComponentActivity() {
                 var defaultTagIds by remember { mutableStateOf(emptySet<String>()) }
                 var scannerAutoTagNames by remember { mutableStateOf(emptySet<String>()) }
                 var isLoggedIn by remember { mutableStateOf(tokenStorage.hasToken()) }
+                var pendingManualIsbn by remember { mutableStateOf<String?>(null) }
+                var showManualAddDialog by remember { mutableStateOf(false) }
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 val sortedBooks = remember(books) { books.sortedBy { it.title } }
@@ -176,6 +179,47 @@ class MainActivity : ComponentActivity() {
                         // Fallback for books without ID
                         books = books - book
                         scannedIsbns = scannedIsbns - book.isbn13
+                    }
+                }
+
+                val handleBookAdded: (Book) -> Unit = { backendBook ->
+                    books = books.filterNot { it.id.isNotEmpty() && it.id == backendBook.id }.toSet() + backendBook
+                    if (backendBook.isbn13.isNotEmpty()) {
+                        scannedIsbns = scannedIsbns + backendBook.isbn13
+                    }
+                    recentScannedBooks =
+                        (listOf(backendBook) + recentScannedBooks.filterNot { b ->
+                            (backendBook.id.isNotEmpty() && b.id == backendBook.id) ||
+                                b.isbn13 == backendBook.isbn13
+                        }).take(5)
+
+                    val autoNames = scannerAutoTagNames
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
+
+                    if (autoNames.isNotEmpty() && backendBook.id.isNotEmpty()) {
+                        val mergedNames = (backendBook.tags.map { it.name } + autoNames)
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+
+                        apiService.setBookTags(backendBook.id, mergedNames) { tagsResult ->
+                            tagsResult.onSuccess { updatedTags ->
+                                val updatedBook = backendBook.copy(tags = updatedTags)
+                                books = books.filterNot { it.id.isNotEmpty() && it.id == updatedBook.id }.toSet() + updatedBook
+                                // Keep recent scan list in sync (don't reorder)
+                                recentScannedBooks = recentScannedBooks.map { b ->
+                                    if ((updatedBook.id.isNotEmpty() && b.id == updatedBook.id) || b.isbn13 == updatedBook.isbn13) updatedBook else b
+                                }
+                                // Refresh tag list in case new tags were created from the scanner dialog
+                                apiService.getTags { res ->
+                                    res.onSuccess { fetchedTags -> tags = fetchedTags }
+                                }
+                            }.onFailure { e ->
+                                Log.e("MainActivity", "Failed to auto-tag book ${backendBook.id}", e)
+                            }
+                        }
                     }
                 }
 
@@ -385,51 +429,21 @@ class MainActivity : ComponentActivity() {
                                         apiService.addBookByIsbn(isbn) { result ->
                                             result.onSuccess { backendBook ->
                                                 // Book successfully verified and added to backend (upsert by id)
-                                                books = books.filterNot { it.id.isNotEmpty() && it.id == backendBook.id }.toSet() + backendBook
+                                                handleBookAdded(backendBook)
                                                 Log.d("MainActivity", "Book verified and added to backend: ${backendBook.title}")
-                                                // Track recent scans for scanner list (most recent first, max 5)
-                                                recentScannedBooks =
-                                                    (listOf(backendBook) + recentScannedBooks.filterNot { b ->
-                                                        (backendBook.id.isNotEmpty() && b.id == backendBook.id) ||
-                                                            b.isbn13 == backendBook.isbn13
-                                                    }).take(5)
-
-                                                val autoNames = scannerAutoTagNames
-                                                    .map { it.trim() }
-                                                    .filter { it.isNotEmpty() }
-                                                    .toSet()
-
-                                                if (autoNames.isNotEmpty() && backendBook.id.isNotEmpty()) {
-                                                    val mergedNames = (backendBook.tags.map { it.name } + autoNames)
-                                                        .map { it.trim() }
-                                                        .filter { it.isNotEmpty() }
-                                                        .distinct()
-
-                                                    apiService.setBookTags(backendBook.id, mergedNames) { tagsResult ->
-                                                        tagsResult.onSuccess { updatedTags ->
-                                                            val updatedBook = backendBook.copy(tags = updatedTags)
-                                                            books = books.filterNot { it.id.isNotEmpty() && it.id == updatedBook.id }.toSet() + updatedBook
-                                                            // Keep recent scan list in sync (don't reorder)
-                                                            recentScannedBooks = recentScannedBooks.map { b ->
-                                                                if ((updatedBook.id.isNotEmpty() && b.id == updatedBook.id) || b.isbn13 == updatedBook.isbn13) updatedBook else b
-                                                            }
-                                                            // Refresh tag list in case new tags were created from the scanner dialog
-                                                            apiService.getTags { res ->
-                                                                res.onSuccess { fetchedTags -> tags = fetchedTags }
-                                                            }
-                                                        }.onFailure { e ->
-                                                            Log.e("MainActivity", "Failed to auto-tag book ${backendBook.id}", e)
-                                                        }
-                                                    }
-                                                }
                                             }.onFailure { e ->
                                                 Log.e("MainActivity", "Failed to verify/add book to backend: $isbn", e)
                                                 // Show toast notification when barcode fails to be identified
                                                 coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar(
-                                                        message = "Failed to identify barcode. The book may not be in the database.",
-                                                        duration = SnackbarDuration.Short
+                                                    val actionResult = snackbarHostState.showSnackbar(
+                                                        message = "Book not found. Add to database?",
+                                                        actionLabel = "Add",
+                                                        duration = SnackbarDuration.Long
                                                     )
+                                                    if (actionResult == SnackbarResult.ActionPerformed) {
+                                                        pendingManualIsbn = isbn
+                                                        showManualAddDialog = true
+                                                    }
                                                 }
                                                 // Still mark as scanned to prevent retry spam
                                             }
@@ -501,11 +515,51 @@ class MainActivity : ComponentActivity() {
                                         tags = emptyList()
                                         selectedTagIds = emptySet()
                                         defaultTagIds = emptySet()
+                                        pendingManualIsbn = null
+                                        showManualAddDialog = false
                                     },
                                     modifier = Modifier.padding(contentPadding)
                                         .background(MaterialTheme.colorScheme.background)
                                 )
                             }
+                        }
+                    }
+
+                    if (showManualAddDialog) {
+                        val manualIsbn = pendingManualIsbn
+                        if (manualIsbn != null) {
+                            AddMissingBookDialog(
+                                isbn = manualIsbn,
+                                onAdd = { title, author, description ->
+                                    showManualAddDialog = false
+                                    pendingManualIsbn = null
+                                    apiService.createBook(
+                                        title = title,
+                                        isbn13 = manualIsbn,
+                                        author = author,
+                                        description = description
+                                    ) { result ->
+                                        result.onSuccess { backendBook ->
+                                            handleBookAdded(backendBook)
+                                            Log.d("MainActivity", "Book manually added to backend: ${backendBook.title}")
+                                        }.onFailure { e ->
+                                            Log.e("MainActivity", "Failed to create book in backend: $manualIsbn", e)
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    message = "Failed to add book to database.",
+                                                    duration = SnackbarDuration.Short
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                onDismiss = {
+                                    showManualAddDialog = false
+                                    pendingManualIsbn = null
+                                }
+                            )
+                        } else {
+                            showManualAddDialog = false
                         }
                     }
                 }

@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "BackendApiService"
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
+private fun String?.trimToNull(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+
 data class AuthResponse(
     @SerializedName("token") val token: String,
     @SerializedName("user") val user: UserInfo
@@ -76,6 +78,15 @@ data class SetBookTagsResponse(
     @SerializedName("book_id") val bookId: String,
     @SerializedName("tags") val tags: List<Tag>,
     @SerializedName("count") val count: Int
+)
+
+data class CreateBookRequest(
+    @SerializedName("title") val title: String,
+    @SerializedName("isbn13") val isbn13: String,
+    @SerializedName("isbn10") val isbn10: String?,
+    @SerializedName("author") val author: String?,
+    @SerializedName("description") val description: String?,
+    @SerializedName("thumbnail") val thumbnail: String?
 )
 
 data class UserPreference(
@@ -246,6 +257,75 @@ class BackendApiService(private val tokenStorage: TokenStorage) {
                         Log.e(TAG, "Failed to add book with status: ${it.code}")
                         mainHandler.post {
                             callback(Result.failure(IOException("Failed to add book: ${it.code}")))
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    fun createBook(
+        title: String,
+        isbn13: String,
+        isbn10: String? = null,
+        author: String? = null,
+        description: String? = null,
+        thumbnail: String? = null,
+        callback: (Result<Book>) -> Unit
+    ) {
+        val token = tokenStorage.getToken()
+        if (token == null) {
+            callback(Result.failure(IOException("No authentication token")))
+            return
+        }
+
+        val requestBody = gson.toJson(
+            CreateBookRequest(
+                title = title.trim(),
+                isbn13 = isbn13.trim(),
+                isbn10 = isbn10.trimToNull(),
+                author = author.trimToNull(),
+                description = description.trimToNull(),
+                thumbnail = thumbnail.trimToNull()
+            )
+        ).toRequestBody(JSON_MEDIA_TYPE)
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/books")
+            .post(requestBody)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Failed to create book", e)
+                mainHandler.post {
+                    callback(Result.failure(e))
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (it.isSuccessful) {
+                        try {
+                            val body = it.body?.string() ?: return@use
+                            val bookResponse = gson.fromJson(body, BookResponse::class.java)
+                            mainHandler.post {
+                                callback(Result.success(bookResponse.toBook()))
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse create book response", e)
+                            mainHandler.post {
+                                callback(Result.failure(e))
+                            }
+                        }
+                    } else {
+                        if (it.code == 401) {
+                            tokenStorage.clearToken()
+                        }
+                        Log.e(TAG, "Failed to create book with status: ${it.code}")
+                        mainHandler.post {
+                            callback(Result.failure(IOException("Failed to create book: ${it.code}")))
                         }
                     }
                 }
