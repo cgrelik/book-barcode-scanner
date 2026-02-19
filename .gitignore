@@ -13,3 +13,18 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Secrets and credentials - never commit these
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+.env
+.env.*
+*.env
+secrets/
+credentials/
+**/google-services.json
+**/GoogleService-Info.plist
