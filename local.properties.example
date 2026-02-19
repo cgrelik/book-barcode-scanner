@@ -1,0 +1,8 @@
+# Copy this file to local.properties and fill in your values.
+# local.properties is gitignored - never commit real credentials.
+
+# Required for Google Sign-In. Get this from Google Cloud Console.
+GOOGLE_OAUTH_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+
+# Backend API base URL (defaults to localhost if not set)
+BACKEND_BASE_URL=http://localhost:3000
